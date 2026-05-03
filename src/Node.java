@@ -72,11 +72,11 @@ public class Node {
                     e.printStackTrace();
                 }
             }
-        }).start();
+        });
 
         Thread.startVirtualThread(() -> {
             try {
-                while(true) {
+                while (true) {
                     MemberInfo self = membership.get(nodeId);
                     long newHearbeat = self.getHeartbeat() + 1;
                     self.setHeartbeat(newHearbeat);
@@ -88,29 +88,36 @@ public class Node {
                 e.printStackTrace();
             }
 
-        }).start();
+        });
 
         Thread.startVirtualThread(() -> {
             try {
-                while(true) {
-                    List<Peer> randomPeers = pickRandom(2);
+                while (true) {
                     Message gossipMsg = Message.gossip(membership, this.nodeId);
-                    for (Peer p: randomPeers) {
-                        p.send(gossipMsg);
+                    if (peers.size() >= 3) {
+                        List<Peer> randomPeers = pickRandom(2);
+
+                        for (Peer p : randomPeers) {
+                            p.send(gossipMsg);
+                        }
+                    } else {
+                        for (Peer p : peers) {
+                            p.send(gossipMsg);
+                        }
                     }
                     Thread.sleep(1000);
                 }
             } catch (InterruptedException e) {
                 e.printStackTrace();
             }
-        }).start();
+        });
 
         Thread.startVirtualThread(() -> {
             try {
-                while(true) {
+                while (true) {
                     long now = System.currentTimeMillis();
 
-                    for (MemberInfo m: membership.values()) {
+                    for (MemberInfo m : membership.values()) {
                         if (this.nodeId.equals(m.getNodeId())) continue;
 
                         long diff = now - m.getLastUpdated();
@@ -125,24 +132,36 @@ public class Node {
                     Thread.sleep(2000);
                 }
 
-            } catch(InterruptedException e) {e.printStackTrace();}
-        }).start();
-
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        });
 
 
         BufferedReader console = new BufferedReader(new InputStreamReader(System.in));
         while (true) {
-            String payload = console.readLine();
-            Message msg = new Message(
-                    (byte) 1,          // version
-                    (byte) 1,          // type (CHAT)
-                    (byte) 5,          // ttl
-                    this.nodeId,      // originalId (sender node)
-                    payload
-            );
-            broadcast(msg);
+            String[] input = console.readLine().split(" ");
+            String prefix = input[0];
+
+            if (prefix.equals("CHAT")) {
+                String payload = input[1];
+                Message msg = new Message(
+                        (byte) 1,          // version
+                        (byte) 1,          // type (CHAT)
+                        (byte) 5,          // ttl
+                        this.nodeId,      // originalId (sender node)
+                        payload.getBytes()
+                );
+                broadcast(msg);
+            } else if ("MEMBERS".equals(prefix)) {
+                for (var entry: membership.entrySet()) {
+                    MemberInfo m  = entry.getValue();
+                    System.out.println("nodeId: " + m.getNodeId() + " - status: " + m.getStatus());
+                }
+            }
         }
     }
+
 
     public List<Peer> getPeers() {
         return peers;
@@ -155,5 +174,9 @@ public class Node {
                 .limit(number)
                 .mapToObj(peers::get)
                 .toList();
+    }
+
+    public Map<String, MemberInfo> getMembership() {
+        return this.membership;
     }
 }

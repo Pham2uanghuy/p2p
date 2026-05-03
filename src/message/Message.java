@@ -3,6 +3,7 @@ package message;
 import member.MemberInfo;
 
 import java.io.ByteArrayOutputStream;
+import java.io.DataOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -17,9 +18,9 @@ public class Message {
     public String id;          // messageId
     public String originalId;  // sender nodeId
     public long timestamp;
-    public String payload;
+    public byte[] payload;
 
-    public Message(byte version, byte type, byte ttl, String originalId, String payload) {
+    public Message(byte version, byte type, byte ttl, String originalId, byte[] payload) {
         this.version = version;
         this.type = type;
         this.ttl = ttl;
@@ -30,11 +31,11 @@ public class Message {
     }
 
     public static Message gossip(Map<String, MemberInfo> membership, String fromNodeId) {
-        String payload = membership.toString();
+        byte[] payload = encodeMembership(membership);
         return new Message(
                 (byte) 1, // version
                 (byte) 2, // type
-                (byte) 1, // ttl
+                (byte) 3, // ttl
                 fromNodeId,
                 payload
         );
@@ -56,17 +57,14 @@ public class Message {
         int payloadLen = buf.getInt();
         byte[] payloadBytes = new byte[payloadLen];
         buf.get(payloadBytes);
-        String payload = new String(payloadBytes, StandardCharsets.UTF_8);
 
-        Message msg = new Message(version, type, ttl, originalId, payload);
+        Message msg = new Message(version, type, ttl, originalId, payloadBytes);
         msg.id = messageId;
         msg.timestamp = timestamp;
         return msg;
     }
 
     public byte[] toBytes() throws IOException {
-        byte[] payloadBytes = payload.getBytes(StandardCharsets.UTF_8);
-
         ByteBuffer buffer = ByteBuffer.allocate(
                 1   // version
                         + 1   // type
@@ -75,7 +73,7 @@ public class Message {
                         + 16  // originalId
                         + 8   // timestamp
                         + 4   // payload length
-                        + payloadBytes.length
+                        + payload.length
         );
 
         buffer.put(version);
@@ -90,35 +88,35 @@ public class Message {
         buffer.putLong(originalUUID.getMostSignificantBits());
         buffer.putLong(originalUUID.getLeastSignificantBits());
         buffer.putLong(timestamp);
-        buffer.putInt(payloadBytes.length);
-        buffer.put(payloadBytes);
+        buffer.putInt(payload.length);
+        buffer.put(payload);
 
         return buffer.array();
     }
 
     public static byte[] encodeMembership(Map<String, MemberInfo> membership) {
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        ByteBuffer buffer = ByteBuffer.allocate(1024);
+        try {
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            DataOutputStream out = new DataOutputStream(baos);
 
-        buffer.putInt(membership.size());
-
-        for (MemberInfo memberInfo : membership.values()) {
-            UUID uuid = UUID.fromString(memberInfo.getNodeId());
-            buffer.putLong(uuid.getMostSignificantBits());
-            buffer.putLong(uuid.getLeastSignificantBits());
-            buffer.putLong(memberInfo.getHeartbeat());
-            buffer.putLong(memberInfo.getLastUpdated());
-            buffer.put(memberInfo.getStatus());
-            byte[] hostBytes = memberInfo.getHost().getBytes(StandardCharsets.UTF_8);
-            buffer.putInt(hostBytes.length);
-            buffer.put(hostBytes);
-            buffer.putInt(memberInfo.getPort());
+            out.writeInt(membership.size());
+            for (MemberInfo memberInfo : membership.values()) {
+                UUID uuid = UUID.fromString(memberInfo.getNodeId());
+                out.writeLong(uuid.getMostSignificantBits());
+                out.writeLong(uuid.getLeastSignificantBits());
+                out.writeLong(memberInfo.getHeartbeat());
+                out.writeLong(memberInfo.getLastUpdated());
+                out.writeByte(memberInfo.getStatus());
+                byte[] hostBytes = memberInfo.getHost().getBytes(StandardCharsets.UTF_8);
+                out.writeInt(hostBytes.length);
+                out.write(hostBytes);
+                out.writeInt(memberInfo.getPort());
+            }
+            out.flush();
+            return baos.toByteArray();
+        } catch (IOException e) {
+            throw new RuntimeException(e);
         }
-
-        buffer.flip();
-        byte[] result = new byte[buffer.limit()];
-        buffer.get(result);
-        return result;
     }
 
     public static Map<String, MemberInfo> decodeMembership(byte[] data) {
@@ -155,7 +153,8 @@ public class Message {
 
     @Override
     public String toString() {
+        String payloadInString = new String(payload, StandardCharsets.UTF_8);
         return String.format("Message{type=%d, id=%s, from=%s, ttl=%d, payload='%s'}",
-                type, id, originalId, ttl, payload);
+                type, id, originalId, ttl, payloadInString);
     }
 }

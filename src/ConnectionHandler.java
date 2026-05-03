@@ -7,10 +7,11 @@ import java.io.IOException;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 
 public class ConnectionHandler implements Runnable {
-    private static final Set<String> seenMessages = new HashSet<>();
+    private static final Set<String> seenMessages = ConcurrentHashMap.newKeySet();
     private final Peer peer;
     private final Node node;
 
@@ -39,6 +40,7 @@ public class ConnectionHandler implements Runnable {
                 }
 
                 // 2. TTL check
+                msg.ttl--;
                 if (msg.ttl <= 0) continue;
 
 
@@ -47,8 +49,6 @@ public class ConnectionHandler implements Runnable {
                     continue;
                 }
                 seenMessages.add(msg.id);
-
-                System.out.println(msg.toString());
 
                 // 4. decrease ttl before forwarding msg
                 switch (msg.type) {
@@ -59,7 +59,7 @@ public class ConnectionHandler implements Runnable {
                         continue;
                     }
                 }
-                msg.ttl--;
+
 
                 // 5. broadcast msg to other nodes
                 for (Peer p : node.getPeers()) {
@@ -80,6 +80,25 @@ public class ConnectionHandler implements Runnable {
     }
 
     private void handleGossip(Message msg) {
-        Map<String, MemberInfo> incoming = msg.payload;
+        Map<String, MemberInfo> incoming = Message.decodeMembership(msg.payload);
+
+        for (var entry: incoming.entrySet()) {
+            String nodeId = entry.getKey();
+            MemberInfo remote = entry.getValue();
+
+            MemberInfo local = node.getMembership().get(nodeId);
+
+            // case 1: unknown node
+            if (local == null) {
+                node.getMembership().put(nodeId, remote);
+                continue;
+            }
+
+            // case 2: compare heart beat
+            if (remote.getHeartbeat() > local.getHeartbeat()) {
+                node.getMembership().put(nodeId, remote);
+            }
+
+        }
     }
 }

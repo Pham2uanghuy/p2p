@@ -2,7 +2,7 @@ package message;
 
 public class MessageType {
     public static final byte CHAT = 1;
-    public static final byte GOSSIP_JOIN = 2;  // node announces itself
+    public static final byte GOSSIP = 2;  // node announces itself
     public static final byte GOSSIP_SYNC = 3;  // membership list sync
     public static final byte HEARTBEAT = 4;  // liveness ping
     public static final byte HEARTBEAT_ACK = 5;

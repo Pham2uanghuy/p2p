@@ -1,29 +1,16 @@
+import member.MemberInfo;
 import message.Message;
 import message.MessageType;
 
 import java.io.DataInputStream;
 import java.io.IOException;
-import java.util.Collections;
+import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 
-/**
- * Reads messages from one peer and dispatches them to the correct subsystem.
- * <p>
- * Message routing
- * ───────────────
- * CHAT            → print + forward (original behaviour)
- * GOSSIP_JOIN     → MembershipManager.handleJoin()
- * GOSSIP_SYNC     → MembershipManager.mergeGossip() or KVStore.mergeRemoteStore()
- * HEARTBEAT       → HeartbeatManager.onHeartbeat()
- * HEARTBEAT_ACK   → HeartbeatManager.onHeartbeatAck()
- * STORE_PUT       → KVStore.applyRemotePut()
- */
+
 public class ConnectionHandler implements Runnable {
-
-    // shared dedup cache across all handlers
-    private static final Set<String> seenMessages =
-            Collections.newSetFromMap(new ConcurrentHashMap<>());
+    private static final Set<String> seenMessages = new HashSet<>();
     private final Peer peer;
     private final Node node;
 
@@ -34,7 +21,8 @@ public class ConnectionHandler implements Runnable {
 
     @Override
     public void run() {
-        try (DataInputStream in = new DataInputStream(peer.getSocket().getInputStream())) {
+        try (DataInputStream in =
+                     new DataInputStream(peer.getSocket().getInputStream())) {
 
             while (true) {
                 int length = in.readInt();
@@ -43,95 +31,55 @@ public class ConnectionHandler implements Runnable {
 
                 Message msg = Message.fromBytes(data);
 
-                // ── version check ─────────────────────────────────────────
+                // 1. version check
+                // TODO: still hardcode, need to fix this
                 if (msg.version != 1) {
-                    System.err.println("[Handler] Unsupported version: " + msg.version);
+                    System.out.println("Unsupported version: " + msg.version);
                     continue;
                 }
 
-                // ── TTL check ─────────────────────────────────────────────
+                // 2. TTL check
                 if (msg.ttl <= 0) continue;
 
-                // ── dedup (skip heartbeats — they are not forwarded) ──────
-                boolean isHb = msg.type == MessageType.HEARTBEAT ||
-                        msg.type == MessageType.HEARTBEAT_ACK;
-                if (!isHb && seenMessages.contains(msg.id)) continue;
-                if (!isHb) seenMessages.add(msg.id);
 
-                // ── dispatch ──────────────────────────────────────────────
-                dispatch(msg);
+                // 3. dedup
+                if (seenMessages.contains(msg.id)) {
+                    continue;
+                }
+                seenMessages.add(msg.id);
+
+                System.out.println(msg.toString());
+
+                // 4. decrease ttl before forwarding msg
+                switch (msg.type) {
+                    case MessageType.CHAT -> handleChat(msg);
+                    case MessageType.GOSSIP -> handleGossip(msg);
+                    default -> {
+                        System.out.println("Unknow message type: " + msg.type);
+                        continue;
+                    }
+                }
+                msg.ttl--;
+
+                // 5. broadcast msg to other nodes
+                for (Peer p : node.getPeers()) {
+                    if (p != peer) {
+                        p.send(msg);
+                    }
+                }
             }
 
         } catch (IOException e) {
-            System.out.printf("[Handler] Peer %s disconnected%n",
-                    peer.getRemoteNodeId() != null ? peer.getRemoteNodeId() : peer.getSocket().getRemoteSocketAddress());
+            System.out.println("Peer disconnected");
             node.removePeer(peer);
         }
     }
 
-    private void dispatch(Message msg) {
-        MembershipManager membership = node.getMembershipManager();
-        HeartbeatManager heartbeat = node.getHeartbeatManager();
-        KVStore store = node.getKVStore();
-
-        switch (msg.type) {
-
-            // ── chat (original behaviour) ─────────────────────────────────
-            case MessageType.CHAT -> {
-                System.out.printf("[Chat] %s: %s%n", msg.originalId, msg.payload);
-                msg.ttl--;
-                node.broadcast(msg, peer);
-            }
-
-            // ── gossip join ───────────────────────────────────────────────
-            case MessageType.GOSSIP_JOIN -> {
-                peer.setRemoteNodeId(msg.originalId);
-                membership.handleJoin(msg.payload);
-                // forward to others so the whole cluster learns about the joiner
-                msg.ttl--;
-                node.broadcast(msg, peer);
-            }
-
-            // ── gossip sync (membership view OR store anti-entropy) ───────
-            case MessageType.GOSSIP_SYNC -> {
-                if (msg.payload.startsWith("__STORE_SYNC__:")) {
-                    store.mergeRemoteStore(msg.payload);
-                } else {
-                    membership.mergeGossip(msg.payload);
-                }
-                // GOSSIP_SYNC is not re-broadcast; each node picks its own targets
-            }
-
-            // ── heartbeat ─────────────────────────────────────────────────
-            case MessageType.HEARTBEAT -> {
-                peer.setRemoteNodeId(msg.originalId);
-                long counter = parseLong(msg.payload);
-                heartbeat.onHeartbeat(msg.originalId, counter);
-                // heartbeats are NOT forwarded (TTL = 1)
-            }
-
-            case MessageType.HEARTBEAT_ACK -> {
-                long counter = parseLong(msg.payload);
-                heartbeat.onHeartbeatAck(msg.originalId, counter);
-            }
-
-            // ── store put ─────────────────────────────────────────────────
-            case MessageType.STORE_PUT -> {
-                store.applyRemotePut(msg.key, msg.value);
-                // forward so all nodes replicate
-                msg.ttl--;
-                node.broadcast(msg, peer);
-            }
-
-            default -> System.err.println("[Handler] Unknown message type: " + msg.type);
-        }
+    private void handleChat(Message msg) {
+        System.out.println(msg.toString());
     }
 
-    private long parseLong(String s) {
-        try {
-            return Long.parseLong(s);
-        } catch (NumberFormatException e) {
-            return 0L;
-        }
+    private void handleGossip(Message msg) {
+        Map<String, MemberInfo> incoming = msg.payload;
     }
 }
